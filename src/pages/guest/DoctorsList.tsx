@@ -6,6 +6,7 @@ interface Doctor {
   full_name: string
   created_at: string
   is_banned: boolean
+  doctor_type: string | null
 }
 
 export default function DoctorsList() {
@@ -21,7 +22,7 @@ export default function DoctorsList() {
     setLoading(true)
     const { data, error } = await supabase
       .from("profiles")
-      .select("id, full_name, created_at, is_banned")
+      .select("id, full_name, created_at, is_banned, doctor_type")
       .eq("role", "DOCTOR")
       .order("full_name", { ascending: true })
 
@@ -52,6 +53,7 @@ export default function DoctorsList() {
             className="p-6 rounded-xl bg-white shadow hover:shadow-lg transition-shadow"
           >
             <h2 className="text-xl font-semibold">{doc.full_name}</h2>
+            {doc.doctor_type && <p className="text-gray-600 mt-1">Specjalizacja: {doc.doctor_type}</p>}
             <p className="text-gray-500 text-sm">Dołączył: {new Date(doc.created_at).toLocaleDateString()}</p>
             {doc.is_banned && <p className="text-red-500 font-medium mt-1">Zablokowany</p>}
           </div>

@@ -7,13 +7,14 @@ export default function CreateDoctor() {
     full_name: '',
     email: '',
     password: '',
+    doctor_type: '', // nowa wartość
   });
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
@@ -38,6 +39,7 @@ export default function CreateDoctor() {
           full_name: formData.full_name.trim(),
           email: formData.email.trim(),
           password: formData.password,
+          doctor_type: formData.doctor_type, // wysyłamy typ lekarza
         }),
       });
 
@@ -47,11 +49,12 @@ export default function CreateDoctor() {
         throw new Error(result.error || 'Nie udało się utworzyć lekarza');
       }
 
-      setSuccess(`Lekarz ${formData.full_name} został pomyślnie dodany!`);
+      setSuccess(`Lekarz ${formData.full_name} (${formData.doctor_type}) został pomyślnie dodany!`);
       setFormData({
         full_name: '',
         email: '',
         password: '',
+        doctor_type: '',
       });
 
     } catch (err: any) {
@@ -73,6 +76,7 @@ export default function CreateDoctor() {
         </div>
 
         <form onSubmit={handleSubmit} className="bg-white shadow-xl rounded-xl p-8 border border-gray-100 space-y-6">
+          {/* Imię i nazwisko */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Imię i nazwisko <span className="text-red-500">*</span>
@@ -88,6 +92,7 @@ export default function CreateDoctor() {
             />
           </div>
 
+          {/* Email */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Email <span className="text-red-500">*</span>
@@ -103,6 +108,7 @@ export default function CreateDoctor() {
             />
           </div>
 
+          {/* Hasło */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Hasło tymczasowe <span className="text-red-500">*</span>
@@ -122,6 +128,28 @@ export default function CreateDoctor() {
             </p>
           </div>
 
+          {/* Typ lekarza */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              Specjalizacja lekarza <span className="text-red-500">*</span>
+            </label>
+            <select
+              name="doctor_type"
+              value={formData.doctor_type}
+              onChange={handleChange}
+              required
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+            >
+              <option value="">Wybierz specjalizację</option>
+              <option value="Kardiolog">Kardiolog</option>
+              <option value="Dermatolog">Dermatolog</option>
+              <option value="Pediatra">Pediatra</option>
+              <option value="Neurolog">Neurolog</option>
+              <option value="Stomatolog">Stomatolog</option>
+            </select>
+          </div>
+
+          {/* Błędy */}
           {error && (
             <div className="flex items-center gap-3 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
               <AlertCircle size={20} />
@@ -129,6 +157,7 @@ export default function CreateDoctor() {
             </div>
           )}
 
+          {/* Sukces */}
           {success && (
             <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg text-green-700">
               <CheckCircle size={20} />
@@ -136,6 +165,7 @@ export default function CreateDoctor() {
             </div>
           )}
 
+          {/* Submit */}
           <button
             type="submit"
             disabled={loading}
