@@ -55,6 +55,8 @@ export default function ManageSchedule() {
 
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [doctorId, setDoctorId] = useState<string>('')
+  const [doctorName, setDoctorName] = useState<string>('')
 
   useEffect(() => {
     loadData()
@@ -64,6 +66,19 @@ export default function ManageSchedule() {
     setLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
+
+    setDoctorId(user.id)
+
+    // 🔔 Pobierz imię i nazwisko lekarza
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', user.id)
+      .single()
+
+    if (profile) {
+      setDoctorName(profile.full_name)
+    }
 
     const [avail, abs] = await Promise.all([
       supabase
@@ -81,6 +96,38 @@ export default function ManageSchedule() {
     setAvailabilities(avail.data || [])
     setAbsences(abs.data || [])
     setLoading(false)
+  }
+
+  // 🔔 Funkcja wysyłania powiadomienia do pacjentów
+  async function notifyPatients(message: string) {
+    if (!doctorId || !doctorName) return
+
+    const channel = supabase.channel('schedule-updates')
+    
+    // WAŻNE: Najpierw subscribe, potem send
+    await channel.subscribe()
+    
+    // Małe opóźnienie, żeby kanał się stabilizował
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    await channel.send({
+      type: 'broadcast',
+      event: 'schedule-change',
+      payload: {
+        doctor_id: doctorId,
+        doctor_name: doctorName,
+        message: message,
+        timestamp: new Date().toISOString()
+      }
+    })
+
+    console.log('✅ Wysłano powiadomienie:', message, 'od:', doctorName)
+    
+    // Poczekaj chwilę przed zamknięciem, żeby wiadomość zdążyła wyjść
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    // Cleanup
+    await supabase.removeChannel(channel)
   }
 
   function resetAvailForm() {
@@ -169,6 +216,9 @@ export default function ManageSchedule() {
     setSuccess('Dostępność została dodana')
     resetAvailForm()
     loadData()
+
+    // 🔔 Powiadom pacjentów
+    await notifyPatients('Lekarz dodał nowe terminy dostępności')
   }
 
   async function checkAvailabilityOverlap(): Promise<boolean> {
@@ -264,6 +314,9 @@ export default function ManageSchedule() {
 
     setSuccess('Dostępność została usunięta')
     loadData()
+
+    // 🔔 Powiadom pacjentów
+    await notifyPatients('Lekarz usunął dostępność - sprawdź harmonogram')
   }
 
   async function handleAddAbsence(e: React.FormEvent) {
@@ -319,6 +372,12 @@ export default function ManageSchedule() {
     )
     resetAbsenceForm()
     loadData()
+
+    // 🔔 Powiadom pacjentów
+    const msg = conflicts.length > 0
+      ? `Lekarz dodał absencję. Odwołano ${conflicts.length} wizyt!`
+      : 'Lekarz zgłosił absencję - sprawdź dostępne terminy'
+    await notifyPatients(msg)
   }
 
   async function checkAbsenceConflicts(): Promise<Consultation[]> {
@@ -351,6 +410,9 @@ export default function ManageSchedule() {
 
     setSuccess('Absencja została usunięta')
     loadData()
+
+    // 🔔 Powiadom pacjentów
+    await notifyPatients('Lekarz odwołał absencję - dostępne nowe terminy')
   }
 
   function toggleDayOfWeek(day: number) {

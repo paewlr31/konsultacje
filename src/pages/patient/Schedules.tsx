@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { RealtimeChannel } from '@supabase/supabase-js'
 
 type ConsultationType = 'FIRST_VISIT' | 'FOLLOWUP' | 'CHRONIC_DISEASE' | 'PRESCRIPTION'
 
@@ -41,6 +42,14 @@ interface SelectedSlot {
   minute: number
 }
 
+// 🔔 Interface dla powiadomień
+interface Notification {
+  id: string
+  message: string
+  timestamp: string
+  doctorName: string
+}
+
 export default function Schedules() {
   const [doctors, setDoctors] = useState<Doctor[]>([])
   const [selectedDoctor, setSelectedDoctor] = useState<string>('')
@@ -64,6 +73,10 @@ export default function Schedules() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
+  // 🔔 Stan powiadomień
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [showNotifications, setShowNotifications] = useState(false)
+
   const SLOT_HEIGHT = 60
   const HOURS_TO_SHOW = 12
 
@@ -77,87 +90,128 @@ export default function Schedules() {
     }
   }, [selectedDoctor, currentWeekStart])
 
-  async function loadDoctors() {
-  setLoading(true)
-  setError('')
+  // 🔔 WebSocket - subskrybuj powiadomienia
+  useEffect(() => {
+    let channel: RealtimeChannel
 
-  try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('id, full_name')
-      .eq('role', 'DOCTOR')           // ← najczęściej wystarczy ta linia
-      // .eq('role', 'DOCTOR'::user_role)   // ← alternatywa bardziej ścisła
-      // .ilike('role::text', 'DOCTOR')     // ← najbezpieczniejsza jeśli coś nie działa
-      .order('full_name', { ascending: true })
+    const setupRealtimeSubscription = async () => {
+      channel = supabase.channel('schedule-updates')
 
-    if (error) throw error
+      channel
+        .on('broadcast', { event: 'schedule-change' }, (payload) => {
+          console.log('📨 Otrzymano powiadomienie:', payload)
+          console.log('📨 Payload payload:', payload.payload)
+          console.log('📨 Doctor name:', payload.payload.doctor_name)
 
-    console.log('Znalezieni lekarze:', data) // ← debug – koniecznie zostaw na początek
+          const { doctor_id, doctor_name, message, timestamp } = payload.payload
 
-    const doctorsList = data || []
+          // Jeśli powiadomienie dotyczy aktualnie wybranego lekarza
+          if (doctor_id === selectedDoctor) {
+            // Dodaj powiadomienie
+            const newNotification: Notification = {
+              id: Date.now().toString(),
+              message: message,
+              timestamp: timestamp,
+              doctorName: doctor_name || 'Nieznany lekarz'
+            }
 
-    setDoctors(doctorsList)
+            console.log('📝 Utworzono powiadomienie:', newNotification)
 
-    if (doctorsList.length > 0) {
-      setSelectedDoctor(doctorsList[0].id)
-    } else {
-      setError('Nie znaleziono lekarzy w systemie')
+            setNotifications(prev => [newNotification, ...prev].slice(0, 10))
+            setShowNotifications(true)
+
+            // Odśwież dane lekarza
+            loadDoctorData()
+          }
+        })
+        .subscribe()
+
+      console.log('✅ Połączono z kanałem powiadomień')
     }
-  } catch (err: any) {
-    console.error('Błąd podczas ładowania listy lekarzy:', err)
-    setError('Problem z pobraniem listy lekarzy: ' + (err.message || 'nieznany błąd'))
-  } finally {
-    setLoading(false)
+
+    setupRealtimeSubscription()
+
+    // Cleanup - odsubskrybuj przy unmount
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel)
+        console.log('🔌 Odłączono od kanału powiadomień')
+      }
+    }
+  }, [selectedDoctor])
+
+  async function loadDoctors() {
+    setLoading(true)
+    setError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name')
+        .eq('role', 'DOCTOR')
+        .order('full_name', { ascending: true })
+
+      if (error) throw error
+
+      const doctorsList = data || []
+      setDoctors(doctorsList)
+
+      if (doctorsList.length > 0) {
+        setSelectedDoctor(doctorsList[0].id)
+      } else {
+        setError('Nie znaleziono lekarzy w systemie')
+      }
+    } catch (err: any) {
+      console.error('Błąd podczas ładowania listy lekarzy:', err)
+      setError('Problem z pobraniem listy lekarzy: ' + (err.message || 'nieznany błąd'))
+    } finally {
+      setLoading(false)
+    }
   }
-}
 
- async function loadDoctorData() {
-  if (!selectedDoctor) return
+  async function loadDoctorData() {
+    if (!selectedDoctor) return
 
-  try {
-    const weekEnd = new Date(currentWeekStart)
-    weekEnd.setDate(weekEnd.getDate() + 6)
+    try {
+      const weekEnd = new Date(currentWeekStart)
+      weekEnd.setDate(weekEnd.getDate() + 6)
 
-    const weekStartStr = currentWeekStart.toISOString().split('T')[0]
-    const weekEndStr = weekEnd.toISOString().split('T')[0]
+      const weekStartStr = currentWeekStart.toISOString().split('T')[0]
+      const weekEndStr = weekEnd.toISOString().split('T')[0]
 
-    const [avail, abs, consults] = await Promise.all([
-      supabase
-        .from('doctor_availability')
-        .select('*')
-        .eq('doctor_id', selectedDoctor),
+      const [avail, abs, consults] = await Promise.all([
+        supabase
+          .from('doctor_availability')
+          .select('*')
+          .eq('doctor_id', selectedDoctor),
 
-      // 🔥 KLUCZOWA POPRAWKA – WARUNEK NACHODZENIA DAT
-      supabase
-        .from('doctor_absences')
-        .select('*')
-        .eq('doctor_id', selectedDoctor)
-        .lte('start_date', weekEndStr)   // absencja zaczęła się PRZED końcem tygodnia
-        .gte('end_date', weekStartStr),  // absencja kończy się PO początku tygodnia
+        supabase
+          .from('doctor_absences')
+          .select('*')
+          .eq('doctor_id', selectedDoctor)
+          .lte('start_date', weekEndStr)
+          .gte('end_date', weekStartStr),
 
-      supabase
-        .from('consultations')
-        .select('*')
-        .eq('doctor_id', selectedDoctor)
-        .gte('consultation_date', weekStartStr)
-        .lte('consultation_date', weekEndStr)
-        .neq('status', 'CANCELLED')
-    ])
+        supabase
+          .from('consultations')
+          .select('*')
+          .eq('doctor_id', selectedDoctor)
+          .gte('consultation_date', weekStartStr)
+          .lte('consultation_date', weekEndStr)
+          .neq('status', 'CANCELLED')
+      ])
 
-    if (avail.error) console.error('Błąd dostępności:', avail.error)
-    if (abs.error) console.error('Błąd absencji:', abs.error)
-    if (consults.error) console.error('Błąd wizyt:', consults.error)
+      if (avail.error) console.error('Błąd dostępności:', avail.error)
+      if (abs.error) console.error('Błąd absencji:', abs.error)
+      if (consults.error) console.error('Błąd wizyt:', consults.error)
 
-    console.log('ABSENCJE:', abs.data) // ← DEBUG – MUSI coś wypisać
-
-    setAvailabilities(avail.data || [])
-    setAbsences(abs.data || [])
-    setConsultations(consults.data || [])
-  } catch (err) {
-    console.error('Krytyczny błąd w loadDoctorData:', err)
+      setAvailabilities(avail.data || [])
+      setAbsences(abs.data || [])
+      setConsultations(consults.data || [])
+    } catch (err) {
+      console.error('Krytyczny błąd w loadDoctorData:', err)
+    }
   }
-}
-
 
   function getWeekStart(date: Date): Date {
     const d = new Date(date)
@@ -425,7 +479,63 @@ export default function Schedules() {
 
   return (
     <div className="p-8">
-      <h1 className="text-3xl font-bold mb-6">Rezerwacja konsultacji</h1>
+      <div className="flex justify-between items-start mb-6">
+        <h1 className="text-3xl font-bold">Rezerwacja konsultacji</h1>
+
+        {/* 🔔 Przycisk powiadomień */}
+        <div className="relative">
+          <button
+            onClick={() => setShowNotifications(!showNotifications)}
+            className="relative px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-2"
+          >
+            🔔 Powiadomienia
+            {notifications.length > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-6 h-6 flex items-center justify-center font-bold">
+                {notifications.length}
+              </span>
+            )}
+          </button>
+
+          {/* Panel powiadomień */}
+          {showNotifications && (
+            <div className="absolute right-0 mt-2 w-96 bg-white border rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
+              <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
+                <h3 className="font-bold">Powiadomienia</h3>
+                <button
+                  onClick={() => setNotifications([])}
+                  className="text-sm text-red-500 hover:text-red-700"
+                >
+                  Wyczyść wszystkie
+                </button>
+              </div>
+
+              {notifications.length === 0 ? (
+                <div className="p-4 text-center text-gray-500">
+                  Brak nowych powiadomień
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {notifications.map(notif => (
+                    <div key={notif.id} className="p-4 hover:bg-gray-50">
+                      <div className="flex items-start gap-2 mb-1">
+                        <span className="text-xs font-bold text-blue-800 bg-blue-100 px-2 py-1 rounded">
+                          {notif.doctorName}
+                        </span>
+                      </div>
+                      <p className="text-sm font-semibold text-gray-800">
+                        {notif.message}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {new Date(notif.timestamp).toLocaleString('pl-PL')}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       {error && (
         <div className="mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded">
@@ -561,49 +671,46 @@ export default function Schedules() {
               </div>
 
               {weekDays.map((date, dayIndex) => {
-  const inAbsence = isDateInAbsence(date)
-  const available = isSlotAvailable(date, slot.hour, slot.minute)
-  const selected = isSlotSelected(date, slot.hour, slot.minute)
-  const isTodayDate = isToday(date)
-  const isPast = isPastDateTime(date, slot.hour, slot.minute)
+                const inAbsence = isDateInAbsence(date)
+                const available = isSlotAvailable(date, slot.hour, slot.minute)
+                const selected = isSlotSelected(date, slot.hour, slot.minute)
+                const isTodayDate = isToday(date)
+                const isPast = isPastDateTime(date, slot.hour, slot.minute)
 
-  return (
-    <div
-      key={dayIndex}
-      // ↓↓↓ Blokujemy klikanie w dniu absencji ↓↓↓
-      onClick={() => {
-        if (inAbsence) return;           // nic nie robimy
-        handleSlotClick(date, slot.hour, slot.minute);
-      }}
-      className={`relative border-r transition-colors ${
-        isTodayDate ? 'bg-blue-50' : ''
-      } ${
-        // Cała kolumna czerwona przy absencji – najważniejsze
-        inAbsence
-          ? 'bg-red-50 hover:bg-red-100 cursor-not-allowed'
-          : selected
-            ? 'bg-blue-400 border-2 border-blue-600'
-            : available && !isPast
-              ? 'bg-green-200 hover:bg-green-300 cursor-pointer'
-              : 'bg-gray-100'
-      } ${isPast ? 'opacity-50 cursor-not-allowed' : ''}`}
-      style={{ height: `${SLOT_HEIGHT}px` }}
-    >
-      {selected && !inAbsence && (
-        <div className="absolute inset-0 flex items-center justify-center text-white font-bold">
-          ✓
-        </div>
-      )}
+                return (
+                  <div
+                    key={dayIndex}
+                    onClick={() => {
+                      if (inAbsence) return
+                      handleSlotClick(date, slot.hour, slot.minute)
+                    }}
+                    className={`relative border-r transition-colors ${
+                      isTodayDate ? 'bg-blue-50' : ''
+                    } ${
+                      inAbsence
+                        ? 'bg-red-50 hover:bg-red-100 cursor-not-allowed'
+                        : selected
+                          ? 'bg-blue-400 border-2 border-blue-600'
+                          : available && !isPast
+                            ? 'bg-green-200 hover:bg-green-300 cursor-pointer'
+                            : 'bg-gray-100'
+                    } ${isPast ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    style={{ height: `${SLOT_HEIGHT}px` }}
+                  >
+                    {selected && !inAbsence && (
+                      <div className="absolute inset-0 flex items-center justify-center text-white font-bold">
+                        ✓
+                      </div>
+                    )}
 
-      {/* Bardzo czytelny napis w środku komórki – opcjonalny, ale mocno polecany */}
-      {inAbsence && (
-        <div className="absolute inset-0 flex items-center justify-center text-red-700 text-xs font-bold opacity-70 pointer-events-none">
-          LEKARZ NIEOBECNY
-        </div>
-      )}
-    </div>
-  )
-})}
+                    {inAbsence && (
+                      <div className="absolute inset-0 flex items-center justify-center text-red-700 text-xs font-bold opacity-70 pointer-events-none">
+                        LEKARZ NIEOBECNY
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           ))}
         </div>
