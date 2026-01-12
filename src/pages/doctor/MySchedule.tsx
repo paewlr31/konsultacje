@@ -47,7 +47,7 @@ export default function MySchedule() {
   const [availabilities, setAvailabilities] = useState<Availability[]>([])
   const [loading, setLoading] = useState(true)
   const [hoveredConsultation, setHoveredConsultation] = useState<string | null>(null)
-  const [scrollOffset, setScrollOffset] = useState(0)
+  const [scrollOffset, setScrollOffset] = useState(12)//tutaj jest poczatkowa godizna widoku (wierszami)
 
   const SLOT_HEIGHT = 60
   const HOURS_TO_SHOW = 6
@@ -306,14 +306,14 @@ function getConsultationColorBorder(type: string): string {
           
           <div className="flex gap-2">
             <button
-              onClick={() => setScrollOffset(Math.max(0, scrollOffset - 4))}
+              onClick={() => setScrollOffset(Math.max(0, scrollOffset - 12))}
               disabled={scrollOffset === 0}
               className="px-3 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-50"
             >
               ↑ Wcześniej
             </button>
             <button
-              onClick={() => setScrollOffset(Math.min(36, scrollOffset + 4))}
+              onClick={() => setScrollOffset(Math.min(36, scrollOffset + 12))}
               disabled={scrollOffset >= 36}
               className="px-3 py-2 bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-50"
             >

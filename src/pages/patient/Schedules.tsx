@@ -30,10 +30,13 @@ interface Absence {
 }
 
 interface Consultation {
+  id: string
   consultation_date: string
   start_time: string
   end_time: string
   status: string
+  consultation_type: ConsultationType
+  patient_id: string
 }
 
 interface SelectedSlot {
@@ -42,7 +45,6 @@ interface SelectedSlot {
   minute: number
 }
 
-// 🔔 Interface dla powiadomień
 interface Notification {
   id: string
   message: string
@@ -50,16 +52,27 @@ interface Notification {
   doctorName: string
 }
 
+interface ConsultationReview {
+  id: string
+  consultation_id: string
+  rating: number
+  comment: string
+  created_at: string
+}
+
 export default function Schedules() {
   const [doctors, setDoctors] = useState<Doctor[]>([])
   const [selectedDoctor, setSelectedDoctor] = useState<string>('')
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(getWeekStart(new Date()))
+  const [currentTimeStart, setCurrentTimeStart] = useState<number>(6) // Początkowa godzina widoku (00:00)
   const [availabilities, setAvailabilities] = useState<Availability[]>([])
   const [absences, setAbsences] = useState<Absence[]>([])
   const [consultations, setConsultations] = useState<Consultation[]>([])
+  const [reviews, setReviews] = useState<ConsultationReview[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedSlots, setSelectedSlots] = useState<SelectedSlot[]>([])
   const [showBookingForm, setShowBookingForm] = useState(false)
+  const [currentUserId, setCurrentUserId] = useState<string>('')
 
   const [bookingForm, setBookingForm] = useState({
     consultationType: 'FIRST_VISIT' as ConsultationType,
@@ -73,14 +86,22 @@ export default function Schedules() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
 
-  // 🔔 Stan powiadomień
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [showNotifications, setShowNotifications] = useState(false)
 
+  // Stan dla modalnego okna z oceną
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null)
+  const [reviewForm, setReviewForm] = useState({
+    rating: 5,
+    comment: ''
+  })
+
   const SLOT_HEIGHT = 60
-  const HOURS_TO_SHOW = 12
+  const HOURS_TO_SHOW = 6 // Pokazujemy 6 godzin na raz
 
   useEffect(() => {
+    loadCurrentUser()
     loadDoctors()
   }, [])
 
@@ -90,7 +111,13 @@ export default function Schedules() {
     }
   }, [selectedDoctor, currentWeekStart])
 
-  // 🔔 WebSocket - subskrybuj powiadomienia
+  async function loadCurrentUser() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      setCurrentUserId(user.id)
+    }
+  }
+
   useEffect(() => {
     let channel: RealtimeChannel
 
@@ -99,15 +126,9 @@ export default function Schedules() {
 
       channel
         .on('broadcast', { event: 'schedule-change' }, (payload) => {
-          console.log('📨 Otrzymano powiadomienie:', payload)
-          console.log('📨 Payload payload:', payload.payload)
-          console.log('📨 Doctor name:', payload.payload.doctor_name)
-
           const { doctor_id, doctor_name, message, timestamp } = payload.payload
 
-          // Jeśli powiadomienie dotyczy aktualnie wybranego lekarza
           if (doctor_id === selectedDoctor) {
-            // Dodaj powiadomienie
             const newNotification: Notification = {
               id: Date.now().toString(),
               message: message,
@@ -115,27 +136,19 @@ export default function Schedules() {
               doctorName: doctor_name || 'Nieznany lekarz'
             }
 
-            console.log('📝 Utworzono powiadomienie:', newNotification)
-
             setNotifications(prev => [newNotification, ...prev].slice(0, 10))
             setShowNotifications(true)
-
-            // Odśwież dane lekarza
             loadDoctorData()
           }
         })
         .subscribe()
-
-      console.log('✅ Połączono z kanałem powiadomień')
     }
 
     setupRealtimeSubscription()
 
-    // Cleanup - odsubskrybuj przy unmount
     return () => {
       if (channel) {
         supabase.removeChannel(channel)
-        console.log('🔌 Odłączono od kanału powiadomień')
       }
     }
   }, [selectedDoctor])
@@ -170,7 +183,7 @@ export default function Schedules() {
   }
 
   async function loadDoctorData() {
-    if (!selectedDoctor) return
+    if (!selectedDoctor || !currentUserId) return
 
     try {
       const weekEnd = new Date(currentWeekStart)
@@ -179,7 +192,7 @@ export default function Schedules() {
       const weekStartStr = currentWeekStart.toISOString().split('T')[0]
       const weekEndStr = weekEnd.toISOString().split('T')[0]
 
-      const [avail, abs, consults] = await Promise.all([
+      const [avail, abs, consults, reviewsData] = await Promise.all([
         supabase
           .from('doctor_availability')
           .select('*')
@@ -196,18 +209,26 @@ export default function Schedules() {
           .from('consultations')
           .select('*')
           .eq('doctor_id', selectedDoctor)
+          .eq('patient_id', currentUserId) // Tylko konsultacje zalogowanego pacjenta
           .gte('consultation_date', weekStartStr)
           .lte('consultation_date', weekEndStr)
-          .neq('status', 'CANCELLED')
+          .neq('status', 'CANCELLED'),
+
+        supabase
+          .from('consultation_reviews')
+          .select('*')
+          .eq('patient_id', currentUserId)
       ])
 
       if (avail.error) console.error('Błąd dostępności:', avail.error)
       if (abs.error) console.error('Błąd absencji:', abs.error)
       if (consults.error) console.error('Błąd wizyt:', consults.error)
+      if (reviewsData.error) console.error('Błąd opinii:', reviewsData.error)
 
       setAvailabilities(avail.data || [])
       setAbsences(abs.data || [])
       setConsultations(consults.data || [])
+      setReviews(reviewsData.data || [])
     } catch (err) {
       console.error('Krytyczny błąd w loadDoctorData:', err)
     }
@@ -225,6 +246,13 @@ export default function Schedules() {
     newDate.setDate(newDate.getDate() + direction * 7)
     setCurrentWeekStart(newDate)
     setSelectedSlots([])
+  }
+
+  function navigateTime(direction: number) {
+    const newStart = currentTimeStart + direction * HOURS_TO_SHOW
+    if (newStart >= 0 && newStart <= 24 - HOURS_TO_SHOW) {
+      setCurrentTimeStart(newStart)
+    }
   }
 
   function isDateInAbsence(date: Date): boolean {
@@ -278,6 +306,25 @@ export default function Schedules() {
     return !isBooked
   }
 
+  function getConsultationAtSlot(date: Date, hour: number, minute: number): Consultation | null {
+    const dateStr = date.toISOString().split('T')[0]
+    const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}:00`
+    
+    return consultations.find(c => {
+      if (c.consultation_date !== dateStr) return false
+      return c.start_time <= timeStr && c.end_time > timeStr
+    }) || null
+  }
+
+  function isConsultationPast(consultation: Consultation): boolean {
+    const consultDate = new Date(consultation.consultation_date + 'T' + consultation.end_time)
+    return consultDate < new Date()
+  }
+
+  function hasReview(consultationId: string): boolean {
+    return reviews.some(r => r.consultation_id === consultationId)
+  }
+
   function isSlotSelected(date: Date, hour: number, minute: number): boolean {
     return selectedSlots.some(
       s => s.date.toDateString() === date.toDateString() && s.hour === hour && s.minute === minute
@@ -285,6 +332,32 @@ export default function Schedules() {
   }
 
   function handleSlotClick(date: Date, hour: number, minute: number) {
+    // Sprawdź czy to konsultacja pacjenta
+    const consultation = getConsultationAtSlot(date, hour, minute)
+    
+    if (consultation && consultation.patient_id === currentUserId) {
+      // Jeśli konsultacja się odbyła, pokaż modal z oceną
+      if (isConsultationPast(consultation)) {
+        setSelectedConsultation(consultation)
+        setShowReviewModal(true)
+        
+        // Załaduj istniejącą opinię jeśli jest
+        const existingReview = reviews.find(r => r.consultation_id === consultation.id)
+        if (existingReview) {
+          setReviewForm({
+            rating: existingReview.rating,
+            comment: existingReview.comment || ''
+          })
+        } else {
+          setReviewForm({
+            rating: 5,
+            comment: ''
+          })
+        }
+        return
+      }
+    }
+
     const isPast = isPastDateTime(date, hour, minute)
     if (isPast) return
 
@@ -394,8 +467,12 @@ export default function Schedules() {
     const lastSlot = sortedSlots[sortedSlots.length - 1]
 
     const startTime = `${firstSlot.hour.toString().padStart(2, '0')}:${firstSlot.minute.toString().padStart(2, '0')}:00`
-    const endHour = lastSlot.hour
-    const endMinute = lastSlot.minute + 30
+    let endHour = lastSlot.hour
+    let endMinute = lastSlot.minute + 30
+    if (endMinute >= 60) {
+      endMinute = 0
+      endHour += 1
+    }
     const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`
 
     let documentsJson = null
@@ -446,12 +523,90 @@ export default function Schedules() {
     loadDoctorData()
   }
 
+  async function handleSubmitReview(e: React.FormEvent) {
+    e.preventDefault()
+    
+    if (!selectedConsultation) return
+
+    setError('')
+    setSuccess('')
+
+    // Sprawdź czy opinia już istnieje
+    const existingReview = reviews.find(r => r.consultation_id === selectedConsultation.id)
+
+    try {
+      if (existingReview) {
+        // Aktualizuj istniejącą opinię
+        const { error: updateError } = await supabase
+          .from('consultation_reviews')
+          .update({
+            rating: reviewForm.rating,
+            comment: reviewForm.comment
+          })
+          .eq('id', existingReview.id)
+
+        if (updateError) throw updateError
+
+        setSuccess('Opinia została zaktualizowana!')
+      } else {
+        // Dodaj nową opinię
+        const { error: insertError } = await supabase
+          .from('consultation_reviews')
+          .insert([{
+            consultation_id: selectedConsultation.id,
+            patient_id: currentUserId,
+            doctor_id: selectedDoctor,
+            rating: reviewForm.rating,
+            comment: reviewForm.comment
+          }])
+
+        if (insertError) throw insertError
+
+        setSuccess('Opinia została dodana!')
+      }
+
+      // Odśwież dane
+      await loadDoctorData()
+      
+      // Zamknij modal po 2 sekundach
+      setTimeout(() => {
+        setShowReviewModal(false)
+        setSelectedConsultation(null)
+        setSuccess('')
+      }, 2000)
+
+    } catch (err: any) {
+      console.error('Błąd podczas zapisywania opinii:', err)
+      setError('Nie udało się zapisać opinii: ' + (err.message || 'nieznany błąd'))
+    }
+  }
+
   function getConsultationDuration(): number {
     return selectedSlots.length * 0.5
   }
 
   function getConsultationPrice(): number {
     return selectedSlots.length * 150
+  }
+
+  function getConsultationTypeLabel(type: ConsultationType): string {
+    const labels: Record<ConsultationType, string> = {
+      'FIRST_VISIT': 'Pierwsza wizyta',
+      'FOLLOWUP': 'Wizyta kontrolna',
+      'CHRONIC_DISEASE': 'Choroba przewlekła',
+      'PRESCRIPTION': 'Recepta'
+    }
+    return labels[type] || type
+  }
+
+  function getConsultationTypeColor(type: ConsultationType): string {
+    const colors: Record<ConsultationType, string> = {
+      'FIRST_VISIT': 'bg-yellow-400',
+      'FOLLOWUP': 'bg-blue-400',
+      'CHRONIC_DISEASE': 'bg-purple-400',
+      'PRESCRIPTION': 'bg-green-400'
+    }
+    return colors[type] || 'bg-gray-400'
   }
 
   const weekDays = Array.from({ length: 7 }, (_, i) => {
@@ -461,7 +616,7 @@ export default function Schedules() {
   })
 
   const timeSlots = Array.from({ length: HOURS_TO_SHOW * 2 }, (_, i) => {
-    const totalMinutes = (8 * 60) + (i * 30)
+    const totalMinutes = (currentTimeStart * 60) + (i * 30)
     const hour = Math.floor(totalMinutes / 60)
     const minute = totalMinutes % 60
     return { hour, minute }
@@ -482,7 +637,6 @@ export default function Schedules() {
       <div className="flex justify-between items-start mb-6">
         <h1 className="text-3xl font-bold">Rezerwacja konsultacji</h1>
 
-        {/* 🔔 Przycisk powiadomień */}
         <div className="relative">
           <button
             onClick={() => setShowNotifications(!showNotifications)}
@@ -496,7 +650,6 @@ export default function Schedules() {
             )}
           </button>
 
-          {/* Panel powiadomień */}
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-96 bg-white border rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
               <div className="p-4 border-b bg-gray-50 flex justify-between items-center">
@@ -615,6 +768,27 @@ export default function Schedules() {
             Następny tydzień →
           </button>
         </div>
+        
+        {/* Przyciski nawigacji czasu */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => navigateTime(-1)}
+            disabled={currentTimeStart === 0}
+            className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            ↑ Wcześniej
+          </button>
+          <span className="px-4 py-2 bg-gray-100 rounded font-semibold">
+            {currentTimeStart.toString().padStart(2, '0')}:00 - {(currentTimeStart + HOURS_TO_SHOW).toString().padStart(2, '0')}:00
+          </span>
+          <button
+            onClick={() => navigateTime(1)}
+            disabled={currentTimeStart >= 24 - HOURS_TO_SHOW}
+            className="px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 disabled:bg-gray-300 disabled:cursor-not-allowed"
+          >
+            ↓ Później
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-4 mb-4 text-sm">
@@ -625,6 +799,10 @@ export default function Schedules() {
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 bg-blue-400 border border-blue-600 rounded"></div>
           <span>Wybrany slot</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 bg-yellow-400 rounded"></div>
+          <span>Twoja konsultacja</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 bg-gray-200 rounded"></div>
@@ -676,36 +854,74 @@ export default function Schedules() {
                 const selected = isSlotSelected(date, slot.hour, slot.minute)
                 const isTodayDate = isToday(date)
                 const isPast = isPastDateTime(date, slot.hour, slot.minute)
+                const consultation = getConsultationAtSlot(date, slot.hour, slot.minute)
+                const isMyConsultation = consultation && consultation.patient_id === currentUserId
+                const isPastConsultation = consultation && isConsultationPast(consultation)
+                const consultationHasReview = consultation && hasReview(consultation.id)
+
+                let bgColor = 'bg-gray-100'
+                let hoverClass = ''
+                let cursorClass = ''
+
+                if (inAbsence) {
+                  bgColor = 'bg-red-50'
+                  hoverClass = 'hover:bg-red-100'
+                  cursorClass = 'cursor-not-allowed'
+                } else if (isMyConsultation) {
+                  // Konsultacja pacjenta - kolor zależy od typu
+                  const typeColor = getConsultationTypeColor(consultation.consultation_type)
+                  bgColor = typeColor
+                  if (isPastConsultation) {
+                    bgColor += ' opacity-60' // Wyszarzona (zmniejszona nieprzezroczystość)
+                    cursorClass = 'cursor-pointer'
+                    hoverClass = 'hover:opacity-80'
+                  }
+                } else if (selected) {
+                  bgColor = 'bg-blue-400 border-2 border-blue-600'
+                } else if (available && !isPast) {
+                  bgColor = 'bg-green-200'
+                  hoverClass = 'hover:bg-green-300'
+                  cursorClass = 'cursor-pointer'
+                } else if (isPast) {
+                  bgColor = 'bg-gray-100 opacity-50'
+                  cursorClass = 'cursor-not-allowed'
+                }
+
+                if (isTodayDate && !isMyConsultation && !selected) {
+                  bgColor = bgColor.replace('bg-', 'bg-blue-50 ')
+                }
+                
 
                 return (
                   <div
                     key={dayIndex}
-                    onClick={() => {
-                      if (inAbsence) return
-                      handleSlotClick(date, slot.hour, slot.minute)
-                    }}
-                    className={`relative border-r transition-colors ${
-                      isTodayDate ? 'bg-blue-50' : ''
-                    } ${
-                      inAbsence
-                        ? 'bg-red-50 hover:bg-red-100 cursor-not-allowed'
-                        : selected
-                          ? 'bg-blue-400 border-2 border-blue-600'
-                          : available && !isPast
-                            ? 'bg-green-200 hover:bg-green-300 cursor-pointer'
-                            : 'bg-gray-100'
-                    } ${isPast ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    onClick={() => handleSlotClick(date, slot.hour, slot.minute)}
+                    className={`relative border-r transition-all ${bgColor} ${hoverClass} ${cursorClass}`}
                     style={{ height: `${SLOT_HEIGHT}px` }}
                   >
-                    {selected && !inAbsence && (
-                      <div className="absolute inset-0 flex items-center justify-center text-white font-bold">
+                    {selected && !inAbsence && !isMyConsultation && (
+                      <div className="absolute inset-0 flex items-center justify-center text-white font-bold text-xl">
                         ✓
                       </div>
                     )}
 
-                    {inAbsence && (
+                    {isMyConsultation && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center text-white text-xs font-bold p-1">
+                        <div>{getConsultationTypeLabel(consultation.consultation_type)}</div>
+                        <div className="text-[10px] mt-1">
+                          {consultation.start_time.slice(0, 5)} - {consultation.end_time.slice(0, 5)}
+                        </div>
+                        {isPastConsultation && (
+                          <div className="text-[10px] mt-1 bg-black bg-opacity-30 px-1 rounded">
+                            {consultationHasReview ? '⭐ Oceniono' : '👆 Kliknij aby ocenić'}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {inAbsence && !isMyConsultation && (
                       <div className="absolute inset-0 flex items-center justify-center text-red-700 text-xs font-bold opacity-70 pointer-events-none">
-                        LEKARZ NIEOBECNY
+                        NIEOBECNY
                       </div>
                     )}
                   </div>
@@ -716,6 +932,7 @@ export default function Schedules() {
         </div>
       </div>
 
+      {/* Modal rezerwacji */}
       {showBookingForm && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
@@ -819,6 +1036,100 @@ export default function Schedules() {
                 <button
                   type="button"
                   onClick={() => setShowBookingForm(false)}
+                  className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                >
+                  Anuluj
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal oceny konsultacji */}
+      {showReviewModal && selectedConsultation && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-lg w-full">
+            <h2 className="text-2xl font-bold mb-4">
+              {hasReview(selectedConsultation.id) ? 'Edytuj opinię' : 'Oceń konsultację'}
+            </h2>
+
+            {success && (
+              <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
+                {success}
+              </div>
+            )}
+
+            {error && (
+              <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+                {error}
+              </div>
+            )}
+
+            <div className="mb-4 p-4 bg-gray-50 rounded">
+              <p className="text-sm text-gray-600">Data:</p>
+              <p className="font-semibold">{selectedConsultation.consultation_date}</p>
+              <p className="text-sm text-gray-600 mt-2">Godzina:</p>
+              <p className="font-semibold">
+                {selectedConsultation.start_time.slice(0, 5)} - {selectedConsultation.end_time.slice(0, 5)}
+              </p>
+              <p className="text-sm text-gray-600 mt-2">Typ:</p>
+              <p className="font-semibold">{getConsultationTypeLabel(selectedConsultation.consultation_type)}</p>
+            </div>
+
+            <form onSubmit={handleSubmitReview}>
+              <div className="mb-4">
+                <label className="block mb-2 font-semibold">Ocena *</label>
+                <div className="flex gap-2">
+                  {[1, 2, 3, 4, 5].map(rating => (
+                    <button
+                      key={rating}
+                      type="button"
+                      onClick={() => setReviewForm(prev => ({ ...prev, rating }))}
+                      className={`text-3xl transition-all ${
+                        rating <= reviewForm.rating
+                          ? 'text-yellow-400 scale-110'
+                          : 'text-gray-300'
+                      }`}
+                    >
+                      ⭐
+                    </button>
+                  ))}
+                </div>
+                <p className="text-sm text-gray-600 mt-2">
+                  {reviewForm.rating === 1 && 'Bardzo źle'}
+                  {reviewForm.rating === 2 && 'Źle'}
+                  {reviewForm.rating === 3 && 'Średnio'}
+                  {reviewForm.rating === 4 && 'Dobrze'}
+                  {reviewForm.rating === 5 && 'Doskonale'}
+                </p>
+              </div>
+
+              <div className="mb-4">
+                <label className="block mb-2 font-semibold">Opinia (opcjonalnie)</label>
+                <textarea
+                  value={reviewForm.comment}
+                  onChange={e => setReviewForm(prev => ({ ...prev, comment: e.target.value }))}
+                  className="w-full p-3 border rounded h-32"
+                  placeholder="Podziel się swoją opinią o konsultacji..."
+                />
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  className="px-6 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+                >
+                  {hasReview(selectedConsultation.id) ? 'Zaktualizuj opinię' : 'Dodaj opinię'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowReviewModal(false)
+                    setSelectedConsultation(null)
+                    setError('')
+                    setSuccess('')
+                  }}
                   className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
                 >
                   Anuluj
