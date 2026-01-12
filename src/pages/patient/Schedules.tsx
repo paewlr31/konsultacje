@@ -436,55 +436,48 @@ export default function Schedules() {
     return date.toDateString() === today.toDateString()
   }
 
-  async function handleBooking(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setSuccess('')
+async function handleBooking(e: React.FormEvent) {
+  e.preventDefault()
+  setError('')
+  setSuccess('')
 
-    if (selectedSlots.length === 0) {
-      setError('Wybierz przynajmniej jeden slot czasowy')
-      return
-    }
+  if (selectedSlots.length === 0) {
+    setError('Wybierz przynajmniej jeden slot czasowy')
+    return
+  }
 
-    if (!bookingForm.patientFullName || !bookingForm.patientAge) {
-      setError('Wypełnij wszystkie wymagane pola')
-      return
-    }
+  if (!bookingForm.patientFullName || !bookingForm.patientAge) {
+    setError('Wypełnij wszystkie wymagane pola')
+    return
+  }
 
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      setError('Musisz być zalogowany')
-      return
-    }
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) {
+    setError('Musisz być zalogowany')
+    return
+  }
 
-    const sortedSlots = [...selectedSlots].sort((a, b) => {
-      const aMinutes = a.hour * 60 + a.minute
-      const bMinutes = b.hour * 60 + b.minute
-      return aMinutes - bMinutes
-    })
+  const sortedSlots = [...selectedSlots].sort((a, b) => {
+    const aMinutes = a.hour * 60 + a.minute
+    const bMinutes = b.hour * 60 + b.minute
+    return aMinutes - bMinutes
+  })
 
-    const firstSlot = sortedSlots[0]
-    const lastSlot = sortedSlots[sortedSlots.length - 1]
+  const firstSlot = sortedSlots[0]
+  const lastSlot = sortedSlots[sortedSlots.length - 1]
 
-    const startTime = `${firstSlot.hour.toString().padStart(2, '0')}:${firstSlot.minute.toString().padStart(2, '0')}:00`
-    let endHour = lastSlot.hour
-    let endMinute = lastSlot.minute + 30
-    if (endMinute >= 60) {
-      endMinute = 0
-      endHour += 1
-    }
-    const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`
+  const startTime = `${firstSlot.hour.toString().padStart(2, '0')}:${firstSlot.minute.toString().padStart(2, '0')}:00`
+  let endHour = lastSlot.hour
+  let endMinute = lastSlot.minute + 30
+  if (endMinute >= 60) {
+    endMinute = 0
+    endHour += 1
+  }
+  const endTime = `${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`
 
-    let documentsJson = null
-    if (bookingForm.documents && bookingForm.documents.length > 0) {
-      documentsJson = bookingForm.documents.map(f => ({
-        name: f.name,
-        size: f.size,
-        type: f.type
-      }))
-    }
-
-    const { error: insertError } = await supabase
+  try {
+    // 1️⃣ Wstawiamy konsultację w bazie
+    const { data: insertedData, error: insertError } = await supabase
       .from('consultations')
       .insert([{
         doctor_id: selectedDoctor,
@@ -499,14 +492,55 @@ export default function Schedules() {
         patient_age: parseInt(bookingForm.patientAge),
         patient_problem: bookingForm.patientProblem,
         patient_notes: bookingForm.patientProblem,
-        documents: documentsJson,
         in_cart: true,
         is_paid: false
       }])
+      .select() // ważne, aby otrzymać id wstawionej konsultacji
 
-    if (insertError) {
-      setError(`Błąd rezerwacji: ${insertError.message}`)
+    if (insertError || !insertedData || insertedData.length === 0) {
+      setError(`Błąd rezerwacji: ${insertError?.message || 'nieznany błąd'}`)
       return
+    }
+
+    const consultationId = insertedData[0].id
+
+    // 2️⃣ Upload dokumentów do Storage jeśli są
+    if (bookingForm.documents && bookingForm.documents.length > 0) {
+      const uploadedDocs = []
+
+      for (const file of bookingForm.documents) {
+        const fileExt = file.name.split('.').pop()
+        const fileName = `${Date.now()}_${file.name}`
+       const filePath = `${user.id}/consultations/${consultationId}/${fileName}`;
+
+        const { data, error: uploadError } = await supabase.storage
+          .from('consultation-documents')
+          .upload(filePath, file)
+
+        if (uploadError) {
+          console.error('Błąd uploadu pliku', file.name, uploadError)
+          setError(`Nie udało się przesłać pliku: ${file.name}`)
+          continue
+        }
+
+        uploadedDocs.push({
+          name: file.name,
+          path: data?.path || filePath,
+          type: file.type,
+          size: file.size
+        })
+      }
+
+      // 3️⃣ Zapisujemy info o dokumentach w kolumnie `documents` konsultacji
+      const { error: updateError } = await supabase
+        .from('consultations')
+        .update({ documents: uploadedDocs })
+        .eq('id', consultationId)
+
+      if (updateError) {
+        console.error('Błąd zapisu dokumentów w DB', updateError)
+        setError('Konsultacja została utworzona, ale dokumenty nie zostały zapisane poprawnie')
+      }
     }
 
     setSuccess('Konsultacja została dodana do koszyka!')
@@ -521,7 +555,12 @@ export default function Schedules() {
       documents: null
     })
     loadDoctorData()
+  } catch (err: any) {
+    console.error('Błąd podczas rezerwacji:', err)
+    setError(err.message || 'Nieznany błąd')
   }
+}
+
 
   async function handleSubmitReview(e: React.FormEvent) {
     e.preventDefault()
@@ -1010,21 +1049,71 @@ export default function Schedules() {
                 />
               </div>
 
-              <div className="mb-4">
-                <label className="block mb-2 font-semibold">Dokumenty (wyniki badań, wypisy, skierowania)</label>
-                <input
-                  type="file"
-                  multiple
-                  onChange={e => setBookingForm(prev => ({ ...prev, documents: e.target.files ? Array.from(e.target.files) : null }))}
-                  className="w-full p-2 border rounded"
-                  accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                />
-                {bookingForm.documents && (
-                  <div className="mt-2 text-sm text-gray-600">
-                    Wybrane pliki: {bookingForm.documents.length}
-                  </div>
-                )}
-              </div>
+           <div className="mb-4">
+  <label className="block mb-2 font-semibold">
+    Dokumenty (wyniki badań, wypisy, skierowania)
+  </label>
+  <input
+    type="file"
+    multiple
+    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
+    onChange={(e) => {
+      const files = e.target.files ? Array.from(e.target.files) : []
+      const maxSizeMB = 10
+
+      // Walidacja typów i rozmiaru
+      const validFiles: File[] = []
+      const errors: string[] = []
+
+      files.forEach(file => {
+        if (!['application/pdf','image/jpeg','image/png','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type)) {
+          errors.push(`${file.name} - niedozwolony typ pliku`)
+        } else if (file.size > maxSizeMB * 1024 * 1024) {
+          errors.push(`${file.name} - plik za duży (max ${maxSizeMB}MB)`)
+        } else {
+          validFiles.push(file)
+        }
+      })
+
+      if (errors.length > 0) alert(errors.join('\n'))
+
+      setBookingForm(prev => ({
+        ...prev,
+        documents: prev.documents ? [...prev.documents, ...validFiles] : validFiles
+      }))
+
+      // Wyczyść input, aby można było dodać te same pliki ponownie
+      e.target.value = ''
+    }}
+    className="w-full p-2 border rounded"
+  />
+
+  {bookingForm.documents && bookingForm.documents.length > 0 && (
+    <div className="mt-2 text-sm text-gray-600">
+      <p>Wybrane pliki ({bookingForm.documents.length}):</p>
+      <ul className="mt-1">
+        {bookingForm.documents.map((file, idx) => (
+          <li key={idx} className="flex items-center justify-between mt-1">
+            <span>{file.name}</span>
+            <button
+              type="button"
+              className="text-red-500 ml-2 hover:underline"
+              onClick={() => {
+                setBookingForm(prev => ({
+                  ...prev,
+                  documents: prev.documents?.filter((_, i) => i !== idx) || null
+                }))
+              }}
+            >
+              Usuń
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )}
+</div>
+
 
               <div className="flex gap-2">
                 <button

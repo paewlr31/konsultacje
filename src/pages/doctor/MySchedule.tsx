@@ -47,7 +47,7 @@ export default function MySchedule() {
   const [availabilities, setAvailabilities] = useState<Availability[]>([])
   const [loading, setLoading] = useState(true)
   const [hoveredConsultation, setHoveredConsultation] = useState<string | null>(null)
-  const [scrollOffset, setScrollOffset] = useState(12)//tutaj jest poczatkowa godizna widoku (wierszami)
+  const [scrollOffset, setScrollOffset] = useState(6)//tutaj jest poczatkowa godizna widoku (wierszami)
 
   const SLOT_HEIGHT = 60
   const HOURS_TO_SHOW = 6
@@ -258,6 +258,52 @@ function getConsultationColorBorder(type: string): string {
     return date
   })
 
+  // ────────────────────────────────────────────────────────────────
+// Pobieranie pojedynczego pliku
+// ────────────────────────────────────────────────────────────────
+const downloadDocument = async (filePath: string, originalName: string) => {
+  try {
+    const { data, error } = await supabase.storage
+      .from('consultation-documents')
+      .download(filePath)
+
+    if (error) throw error
+    if (!data) throw new Error('Brak zawartości pliku')
+
+    const url = URL.createObjectURL(data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = originalName || 'dokument.pdf'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  } catch (err: any) {
+    console.error('Błąd pobierania dokumentu:', err)
+    alert(`Nie udało się pobrać pliku\n${err.message || 'nieznany błąd'}`)
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Pobieranie wszystkich dokumentów konsultacji (jeśli jest więcej niż 1)
+// ────────────────────────────────────────────────────────────────
+const downloadAllDocs = async (docs: any[]) => {
+  if (!docs?.length) return
+
+  for (const doc of docs) {
+    await downloadDocument(doc.path, doc.name)
+    // małe opóźnienie, żeby przeglądarka nie blokowała
+    await new Promise(r => setTimeout(r, 300))
+  }
+}
+
+// Sprawdza, czy dzień to piątek, sobota lub niedziela
+function isFridayOrWeekend(dateStr: string): boolean {
+  const date = new Date(dateStr);
+  const day = date.getDay(); // 0 = niedziela, 1 = poniedziałek, ..., 5 = piątek, 6 = sobota
+  return day === 0 || day === 5 || day === 6; // niedziela || piątek || sobota
+}
+
   const timeSlots = Array.from({ length: HOURS_TO_SHOW * 2 }, (_, i) => {
     const totalMinutes = (scrollOffset + i) * SLOT_DURATION
     const hour = Math.floor(totalMinutes / 60) % 24
@@ -439,39 +485,101 @@ function getConsultationColorBorder(type: string): string {
                           </div>
 
                           {hoveredConsultation === consultation.id && (
-                            <div className="absolute left-full ml-2 top-0 bg-gray-900 text-white p-3 rounded shadow-lg z-30 w-64">
-                              <div className="font-bold mb-2">
-                                {consultation.patient?.full_name || 'Brak pacjenta'}
-                              </div>
-                              <div className="text-sm space-y-1">
-                                <div>
-                                  <strong>Typ:</strong>{' '}
-                          {consultation.consultation_type === 'FIRST_VISIT' && 'Pierwsza wizyta'}
-                          {consultation.consultation_type === 'FOLLOWUP' && 'Wizyta kontrolna'}
-                          {consultation.consultation_type === 'CHRONIC_DISEASE' && 'Choroba przewlekła'}
-                          {consultation.consultation_type === 'PRESCRIPTION' && 'Recepta'}
-                          {consultation.consultation_type === 'CONSULTATION' && 'Konsultacja'}
-                          {consultation.consultation_type === 'CHECKUP' && 'Badanie'}
-                          {consultation.consultation_type === 'EMERGENCY' && 'Nagły wypadek'}
+  <div
+    className={`
+      absolute top-0 bg-gray-900 text-white p-3 rounded-lg shadow-xl z-50 
+      w-70 max-h-[70vh] overflow-y-auto border border-gray-700
+      ${isFridayOrWeekend(consultation.consultation_date) 
+        ? 'right-full mr-3' 
+        : 'left-full ml-3'}
+    `}
+  >
 
+    <div className="font-bold text-base mb-3 pb-2 border-b border-gray-700">
+      {consultation.patient?.full_name || 'Pacjent'}
+    </div>
 
-                                </div>
-                                <div>
-                                  <strong>Status:</strong> {consultation.status}
-                                </div>
-                                {consultation.patient_notes && (
-                                  <div>
-                                    <strong>Notatki:</strong> {consultation.patient_notes}
-                                  </div>
-                                )}
-                                {consultation.documents && (
-                                  <div>
-                                    <strong>Dokumenty:</strong> Tak
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
+    <div className="text-sm space-y-3">
+      <div>
+        <span className="text-gray-400">Typ:</span>{' '}
+        <span>
+          {consultation.consultation_type === 'FIRST_VISIT' && 'Pierwsza wizyta'}
+          {consultation.consultation_type === 'FOLLOWUP' && 'Wizyta kontrolna'}
+          {consultation.consultation_type === 'CHRONIC_DISEASE' && 'Choroba przewlekła'}
+          {consultation.consultation_type === 'PRESCRIPTION' && 'Recepta'}
+          {consultation.consultation_type === 'CONSULTATION' && 'Konsultacja'}
+          {consultation.consultation_type === 'CHECKUP' && 'Badanie'}
+          {consultation.consultation_type === 'EMERGENCY' && 'Nagły wypadek'}
+        </span>
+      </div>
+
+      <div>
+        <span className="text-gray-400">Status:</span> {consultation.status}
+      </div>
+
+      {consultation.patient_notes && (
+        <div>
+          <div className="text-gray-400 mb-1">Notatki pacjenta:</div>
+          <p className="text-gray-200 whitespace-pre-wrap break-words">
+            {consultation.patient_notes}
+          </p>
+        </div>
+      )}
+
+      {/* ── SEKCJA DOKUMENTÓW ── */}
+      <div className="mt-4">
+        <div className="flex items-center justify-between mb-2">
+          <span className="font-semibold">Dokumenty</span>
+          
+          {consultation.documents?.length > 1 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                downloadAllDocs(consultation.documents)
+              }}
+              className="text-xs bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded flex items-center gap-1"
+            >
+              Pobierz wszystkie
+            </button>
+          )}
+        </div>
+
+        {consultation.documents?.length > 0 ? (
+          <ul className="space-y-2">
+            {consultation.documents.map((doc: any, idx: number) => (
+              <li
+                key={idx}
+                className="flex items-center justify-between bg-gray-800 rounded px-3 py-2 hover:bg-gray-700 transition-colors"
+              >
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <span className="text-blue-400">📎</span>
+                  <span className="truncate text-gray-200" title={doc.name}>
+                    {doc.name || 'plik bez nazwy'}
+                  </span>
+                </div>
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    downloadDocument(doc.path, doc.name)
+                  }}
+                  className="ml-3 text-blue-400 hover:text-blue-300 flex-shrink-0"
+                  title="Pobierz"
+                >
+                  ↓
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-gray-500 italic text-center py-3 text-sm">
+            Brak dokumentów
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+)}
                         </div>
                       )
                     })}
