@@ -489,8 +489,8 @@ function isFridayOrWeekend(dateStr: string): boolean {
   setTooltipPos({
     top: rect.top,
     left: isFridayOrWeekend(consultation.consultation_date)
-      ? rect.left - 320
-      : rect.right + 12
+      ? rect.left - 248
+      : rect.right 
   })
 
   setHoveredConsultation(consultation.id)
@@ -509,7 +509,7 @@ function isFridayOrWeekend(dateStr: string): boolean {
   createPortal(
     <div
       className="fixed bg-gray-900 text-white p-2 rounded-lg shadow-xl
-                 z-[99999] w-72 max-h-[70vh] overflow-y-auto border border-gray-700"
+                 z-[99999] w-62 max-h-[70vh] overflow-y-auto border border-gray-700"
       style={{
         top: tooltipPos.top,
         left: tooltipPos.left

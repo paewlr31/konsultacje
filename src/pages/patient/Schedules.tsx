@@ -73,6 +73,7 @@ export default function Schedules() {
   const [selectedSlots, setSelectedSlots] = useState<SelectedSlot[]>([])
   const [showBookingForm, setShowBookingForm] = useState(false)
   const [currentUserId, setCurrentUserId] = useState<string>('')
+  const [isBanned, setIsBanned] = useState<boolean>(false)
 
   const [bookingForm, setBookingForm] = useState({
     consultationType: 'FIRST_VISIT' as ConsultationType,
@@ -97,6 +98,8 @@ export default function Schedules() {
     comment: ''
   })
 
+  
+
   const SLOT_HEIGHT = 60
   const HOURS_TO_SHOW = 6 // Pokazujemy 6 godzin na raz
 
@@ -111,12 +114,28 @@ export default function Schedules() {
     }
   }, [selectedDoctor, currentWeekStart])
 
-  async function loadCurrentUser() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      setCurrentUserId(user.id)
+async function loadCurrentUser() {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    setCurrentUserId(user.id)
+
+    // ← tutaj poprawne miejsce
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('is_banned')
+      .eq('id', user.id)
+      .single()
+
+    if (error) {
+      console.error("Błąd pobierania profilu:", error)
+      return
+    }
+
+    if (profile) {
+      setIsBanned(!!profile.is_banned)
     }
   }
+}
 
   useEffect(() => {
     let channel: RealtimeChannel
@@ -1136,98 +1155,123 @@ async function handleBooking(e: React.FormEvent) {
       )}
 
       {/* Modal oceny konsultacji */}
-      {showReviewModal && selectedConsultation && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg p-6 max-w-lg w-full">
-            <h2 className="text-2xl font-bold mb-4">
-              {hasReview(selectedConsultation.id) ? 'Edytuj opinię' : 'Oceń konsultację'}
-            </h2>
+{showReviewModal && selectedConsultation && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-lg p-6 max-w-lg w-full relative">
 
-            {success && (
-              <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
-                {success}
+      {/* krzyżyk zamykania – warto mieć zawsze */}
+      <button
+        onClick={() => {
+          setShowReviewModal(false)
+          setSelectedConsultation(null)
+          setError('')
+          setSuccess('')
+        }}
+        className="absolute top-3 right-4 text-gray-500 hover:text-gray-700 text-2xl"
+      >
+        ×
+      </button>
+
+      <h2 className="text-2xl font-bold mb-4">
+        {hasReview(selectedConsultation.id) ? 'Edytuj opinię' : 'Oceń konsultację'}
+      </h2>
+
+      {isBanned ? (
+        <div className="p-5 bg-red-50 border border-red-200 rounded text-red-800 mb-6">
+          <p className="font-semibold text-lg mb-2">Twoje konto jest zablokowane</p>
+          <p className="text-sm">
+            Nie możesz obecnie dodawać ani edytować opinii.
+          </p>
+        </div>
+      ) : (
+        <>
+          {success && (
+            <div className="mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded">
+              {success}
+            </div>
+          )}
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
+              {error}
+            </div>
+          )}
+
+          <div className="mb-4 p-4 bg-gray-50 rounded">
+            <p className="text-sm text-gray-600">Data:</p>
+            <p className="font-semibold">{selectedConsultation.consultation_date}</p>
+            <p className="text-sm text-gray-600 mt-2">Godzina:</p>
+            <p className="font-semibold">
+              {selectedConsultation.start_time.slice(0, 5)} - {selectedConsultation.end_time.slice(0, 5)}
+            </p>
+            <p className="text-sm text-gray-600 mt-2">Typ:</p>
+            <p className="font-semibold">{getConsultationTypeLabel(selectedConsultation.consultation_type)}</p>
+          </div>
+
+          <form onSubmit={handleSubmitReview}>
+            <div className="mb-4">
+              <label className="block mb-2 font-semibold">Ocena *</label>
+              <div className="flex gap-2">
+                {[1, 2, 3, 4, 5].map(rating => (
+                  <button
+                    key={rating}
+                    type="button"
+                    onClick={() => setReviewForm(prev => ({ ...prev, rating }))}
+                    className={`text-3xl transition-all ${
+                      rating <= reviewForm.rating
+                        ? 'text-yellow-400 scale-110'
+                        : 'text-gray-300'
+                    }`}
+                  >
+                    ⭐
+                  </button>
+                ))}
               </div>
-            )}
-
-            {error && (
-              <div className="mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded">
-                {error}
-              </div>
-            )}
-
-            <div className="mb-4 p-4 bg-gray-50 rounded">
-              <p className="text-sm text-gray-600">Data:</p>
-              <p className="font-semibold">{selectedConsultation.consultation_date}</p>
-              <p className="text-sm text-gray-600 mt-2">Godzina:</p>
-              <p className="font-semibold">
-                {selectedConsultation.start_time.slice(0, 5)} - {selectedConsultation.end_time.slice(0, 5)}
+              <p className="text-sm text-gray-600 mt-2">
+                {reviewForm.rating === 1 && 'Bardzo źle'}
+                {reviewForm.rating === 2 && 'Źle'}
+                {reviewForm.rating === 3 && 'Średnio'}
+                {reviewForm.rating === 4 && 'Dobrze'}
+                {reviewForm.rating === 5 && 'Doskonale'}
               </p>
-              <p className="text-sm text-gray-600 mt-2">Typ:</p>
-              <p className="font-semibold">{getConsultationTypeLabel(selectedConsultation.consultation_type)}</p>
             </div>
 
-            <form onSubmit={handleSubmitReview}>
-              <div className="mb-4">
-                <label className="block mb-2 font-semibold">Ocena *</label>
-                <div className="flex gap-2">
-                  {[1, 2, 3, 4, 5].map(rating => (
-                    <button
-                      key={rating}
-                      type="button"
-                      onClick={() => setReviewForm(prev => ({ ...prev, rating }))}
-                      className={`text-3xl transition-all ${
-                        rating <= reviewForm.rating
-                          ? 'text-yellow-400 scale-110'
-                          : 'text-gray-300'
-                      }`}
-                    >
-                      ⭐
-                    </button>
-                  ))}
-                </div>
-                <p className="text-sm text-gray-600 mt-2">
-                  {reviewForm.rating === 1 && 'Bardzo źle'}
-                  {reviewForm.rating === 2 && 'Źle'}
-                  {reviewForm.rating === 3 && 'Średnio'}
-                  {reviewForm.rating === 4 && 'Dobrze'}
-                  {reviewForm.rating === 5 && 'Doskonale'}
-                </p>
-              </div>
+            <div className="mb-4">
+              <label className="block mb-2 font-semibold">Opinia (opcjonalnie)</label>
+              <textarea
+                value={reviewForm.comment}
+                onChange={e => setReviewForm(prev => ({ ...prev, comment: e.target.value }))}
+                className="w-full p-3 border rounded h-32"
+                placeholder="Podziel się swoją opinią o konsultacji..."
+              />
+            </div>
 
-              <div className="mb-4">
-                <label className="block mb-2 font-semibold">Opinia (opcjonalnie)</label>
-                <textarea
-                  value={reviewForm.comment}
-                  onChange={e => setReviewForm(prev => ({ ...prev, comment: e.target.value }))}
-                  className="w-full p-3 border rounded h-32"
-                  placeholder="Podziel się swoją opinią o konsultacji..."
-                />
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  className="px-6 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-                >
-                  {hasReview(selectedConsultation.id) ? 'Zaktualizuj opinię' : 'Dodaj opinię'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowReviewModal(false)
-                    setSelectedConsultation(null)
-                    setError('')
-                    setSuccess('')
-                  }}
-                  className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
-                >
-                  Anuluj
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="px-6 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+              >
+                {hasReview(selectedConsultation.id) ? 'Zaktualizuj opinię' : 'Dodaj opinię'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReviewModal(false)
+                  setSelectedConsultation(null)
+                  setError('')
+                  setSuccess('')
+                }}
+                className="px-6 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+              >
+                Anuluj
+              </button>
+            </div>
+          </form>
+        </>
       )}
+    </div>
+  </div>
+)}
     </div>
   )
 }
