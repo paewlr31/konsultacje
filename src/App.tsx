@@ -45,7 +45,6 @@ function RequireAuth({ children, allowedRoles }: { children: React.JSX.Element, 
 
   if (!session) return <Navigate to="/login" state={{ from: location }} replace />
 
-  // Tu możesz dodatkowo pobrać rolę i sprawdzić allowedRoles
   // Dla prostoty – wszystkie zalogowane mają dostęp do swoich sekcji (sprawdzane w Navbar)
 
   return children

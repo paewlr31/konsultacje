@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { createPortal } from 'react-dom' 
 
 type ConsultationType = 'FIRST_VISIT' | 'FOLLOWUP' | 'CHRONIC_DISEASE' | 'PRESCRIPTION' | 'CONSULTATION' | 'CHECKUP' | 'EMERGENCY'
 
@@ -160,6 +161,10 @@ export default function MySchedule() {
   const slots = getAvailableSlotsForDate(date)
   return slots.some(slot => timeStr >= slot.start && timeStr < slot.end)
 }
+const [tooltipPos, setTooltipPos] = useState<{
+  top: number
+  left: number
+} | null>(null)
 
 
   function getConsultationsForSlot(date: Date, hour: number, minute: number): Consultation[] {
@@ -466,15 +471,31 @@ function isFridayOrWeekend(dateStr: string): boolean {
                       return (
                         <div
                           key={consultation.id}
+                           id={`consult-${consultation.id}`} 
                           className={`absolute inset-x-1 ${getConsultationColor(
                             consultation.consultation_type
                           )} ${
                             isPastConsult ? 'opacity-40' : ''
                           } text-white p-2 rounded text-xs border-2 ${getConsultationColorBorder(
                             consultation.consultation_type
-                          )} cursor-pointer z-20`}
+                          )} cursor-pointer z-10`}
                           style={{ height: `${height - 4}px` }}
-                          onMouseEnter={() => setHoveredConsultation(consultation.id)}
+                          onMouseEnter={() => {
+  const el = document.getElementById(`consult-${consultation.id}`)
+  if (!el) return
+
+  const rect = el.getBoundingClientRect()
+
+  setTooltipPos({
+    top: rect.top,
+    left: isFridayOrWeekend(consultation.consultation_date)
+      ? rect.left - 320
+      : rect.right + 12
+  })
+
+  setHoveredConsultation(consultation.id)
+}}
+
                           onMouseLeave={() => setHoveredConsultation(null)}
                         >
                           <div className="font-semibold truncate">
@@ -484,16 +505,16 @@ function isFridayOrWeekend(dateStr: string): boolean {
                             {consultation.start_time.slice(0, 5)} - {consultation.end_time.slice(0, 5)}
                           </div>
 
-                          {hoveredConsultation === consultation.id && (
-  <div
-    className={`
-      absolute top-0 bg-gray-900 text-white p-3 rounded-lg shadow-xl z-50 
-      w-70 max-h-[70vh] overflow-y-auto border border-gray-700
-      ${isFridayOrWeekend(consultation.consultation_date) 
-        ? 'right-full mr-3' 
-        : 'left-full ml-3'}
-    `}
-  >
+ {hoveredConsultation === consultation.id && tooltipPos &&
+  createPortal(
+    <div
+      className="fixed bg-gray-900 text-white p-2 rounded-lg shadow-xl
+                 z-[99999] w-72 max-h-[70vh] overflow-y-auto border border-gray-700"
+      style={{
+        top: tooltipPos.top,
+        left: tooltipPos.left
+      }}
+    >
 
     <div className="font-bold text-base mb-3 pb-2 border-b border-gray-700">
       {consultation.patient?.full_name || 'Pacjent'}
@@ -575,10 +596,12 @@ function isFridayOrWeekend(dateStr: string): boolean {
           <div className="text-gray-500 italic text-center py-3 text-sm">
             Brak dokumentów
           </div>
+          
         )}
       </div>
     </div>
-  </div>
+  </div>,
+     document.body
 )}
                         </div>
                       )

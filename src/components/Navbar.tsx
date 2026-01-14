@@ -4,9 +4,6 @@ import { Link } from 'react-router-dom'
 import Logout from './Logout'
 
 type Role = 'PATIENT' | 'DOCTOR' | 'ADMIN' | null
-//Uwaga: Supabase nie ma natywnego wsparcia dla none, 
-//więc używamy dummy storage + wyłączamy autoRefresh i persistSession.
-
 
 export default function Navbar() {
   const [role, setRole] = useState<Role>(null)

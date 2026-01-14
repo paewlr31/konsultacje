@@ -4,6 +4,9 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
+//Uwaga: Supabase nie ma natywnego wsparcia dla none, 
+//więc używamy dummy storage + wyłączamy autoRefresh i persistSession.
+
 // Domyślny tryb – fallback
 const DEFAULT_STORAGE_TYPE: 'local' | 'session' | 'none' = 'local'
 
