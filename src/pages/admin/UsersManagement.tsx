@@ -22,7 +22,6 @@ export default function UsersManagement() {
     fetchUsers();
   }, []);
 
-  // Pobranie wszystkich użytkowników z tabeli profiles
   const fetchUsers = async () => {
     setLoading(true);
     setError(null);
@@ -35,7 +34,7 @@ export default function UsersManagement() {
 
       if (error) throw error;
 
-      setUsers(data);
+      setUsers(data || []);
     } catch (err: any) {
       console.error(err);
       setError("Nie udało się pobrać użytkowników");
@@ -44,7 +43,6 @@ export default function UsersManagement() {
     }
   };
 
-  // Toggle ban/unban
   const toggleBan = async (userId: string, ban: boolean) => {
     setUpdatingId(userId);
     setError(null);
@@ -99,46 +97,56 @@ export default function UsersManagement() {
               </tr>
             )}
 
-            {users.map((user) => (
-              <tr key={user.id} className="border-t border-gray-200">
-                <td className="px-6 py-3">{user.full_name}</td>
-                <td className="px-6 py-3">{user.role}</td>
-                <td className="px-6 py-3">{user.doctor_type || "-"}</td>
-                <td className="px-6 py-3">{new Date(user.created_at).toLocaleDateString()}</td>
-                <td className="px-6 py-3">
-                  {user.is_banned ? (
-                    <span className="text-red-600 font-semibold">Zablokowany</span>
-                  ) : (
-                    <span className="text-green-600 font-semibold">Aktywny</span>
-                  )}
-                </td>
-                <td className="px-6 py-3">
-                  <button
-                    disabled={updatingId === user.id}
-                    onClick={() => toggleBan(user.id, !user.is_banned)}
-                    className={`
-                      px-4 py-2 rounded-lg font-medium text-white flex items-center gap-2
-                      ${user.is_banned
-                        ? "bg-green-600 hover:bg-green-700"
-                        : "bg-red-600 hover:bg-red-700"
-                      } transition-all duration-200
-                    `}
-                  >
-                    {updatingId === user.id ? (
-                      <Loader2 className="animate-spin h-4 w-4" />
-                    ) : user.is_banned ? (
-                      <>
-                        <Check className="h-4 w-4" /> Odbanuj
-                      </>
+            {users.map((user) => {
+              const isAdmin = user.role?.toLowerCase() === "admin";
+
+              return (
+                <tr key={user.id} className="border-t border-gray-200">
+                  <td className="px-6 py-3">{user.full_name}</td>
+                  <td className="px-6 py-3">{user.role}</td>
+                  <td className="px-6 py-3">{user.doctor_type || "-"}</td>
+                  <td className="px-6 py-3">
+                    {new Date(user.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="px-6 py-3">
+                    {user.is_banned ? (
+                      <span className="text-red-600 font-semibold">Zablokowany</span>
                     ) : (
-                      <>
-                        <X className="h-4 w-4" /> Zbanuj
-                      </>
+                      <span className="text-green-600 font-semibold">Aktywny</span>
                     )}
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-6 py-3">
+                    {isAdmin ? (
+                      <span className="text-gray-400 italic">— admin —</span>
+                    ) : (
+                      <button
+                        disabled={updatingId === user.id}
+                        onClick={() => toggleBan(user.id, !user.is_banned)}
+                        className={`
+                          px-4 py-2 rounded-lg font-medium text-white flex items-center gap-2
+                          ${user.is_banned
+                            ? "bg-green-600 hover:bg-green-700"
+                            : "bg-red-600 hover:bg-red-700"
+                          } transition-all duration-200
+                        `}
+                      >
+                        {updatingId === user.id ? (
+                          <Loader2 className="animate-spin h-4 w-4" />
+                        ) : user.is_banned ? (
+                          <>
+                            <Check className="h-4 w-4" /> Odbanuj
+                          </>
+                        ) : (
+                          <>
+                            <X className="h-4 w-4" /> Zbanuj
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
